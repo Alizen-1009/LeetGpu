@@ -4,13 +4,13 @@ import torch
 from torch.utils.cpp_extension import load
 import os
 os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0"
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 torch.set_grad_enabled(False)
 
 # Load the CUDA kernel as a python module
 lib = load(
-    name="reduction_lib",
-    sources=["reduction_float4.cu"],
+    name="histogram_lib",
+    sources=["histogram.cu"],
     extra_cuda_cflags=[
         "-O3",
         "-U__CUDA_NO_HALF_OPERATORS__",
@@ -78,9 +78,6 @@ def run_benchmark(
     print(f"{'Mean Difference':<14}: {mean_diff:.8f}")
     print(f"{'Max  Difference':<14}: {max_diff:.8f}")
     print("-" * 60)
-    print("\nDetailed Output Comparison:")
-    print(f"out1_np:\n{out1_np}")
-    print(f"out2_np:\n{out2_np}")
 
     return {
         "out1": out1,
@@ -93,15 +90,14 @@ def run_benchmark(
 
 
 
-Ss = [10, 1024, 2048, 4096, 15000000]
+Ss = [10240, 20480, 40960, 81920]
     
 for S in Ss:
     print("=" * 60)
     print(" " * 27 + f"S={S}")
-    a = torch.randn((S)).cuda().float() * 400.0
-    print(a)
-    run_benchmark(lib.reduce_sum, lambda x: torch.sum(x), a, "f32", "f32_torch")
-
+    # 生成 0-255 范围内的随机整数张量
+    a = torch.randint(low=0, high=256, size=(S,), dtype=torch.int32, device='cuda')
+    run_benchmark(lambda x: lib.histogram(x, 256), lambda x: torch.histc(x, bins=256, min=0, max=255), a, "f32", "f32_torch")
 
 
 

@@ -3,14 +3,15 @@ import numpy as np
 import torch
 from torch.utils.cpp_extension import load
 import os
-os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0"
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
+os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"
+
 torch.set_grad_enabled(False)
 
 # Load the CUDA kernel as a python module
 lib = load(
-    name="reduction_lib",
-    sources=["reduction_float4.cu"],
+    name="gemv_lib",
+    sources=["gemv.cu"],
     extra_cuda_cflags=[
         "-O3",
         "-U__CUDA_NO_HALF_OPERATORS__",
@@ -29,18 +30,19 @@ def run_benchmark(
     perf_func1: callable,
     perf_func2: callable,
     a: torch.Tensor,
+    b: torch.Tensor,
     tag1: str,
     tag2: str,
     warmup: int = 10,
-    iters: int = 1000,
+    iters: int = 100,
 ):
     # Warmup and benchmark perf_func1
     for _ in range(warmup):
-        out1 = perf_func1(a)  # warmup
+        out1 = perf_func1(a, b)  # warmup
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(iters):
-        out1 = perf_func1(a)
+        out1 = perf_func1(a, b)
     torch.cuda.synchronize()
     end = time.time()
     total_time1 = (end - start) * 1000  # ms
@@ -49,11 +51,11 @@ def run_benchmark(
 
     # Warmup and benchmark perf_func2
     for _ in range(warmup):
-        out2 = perf_func2(a)
+        out2 = perf_func2(a, b)
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(iters):
-        out2 = perf_func2(a)
+        out2 = perf_func2(a, b)
     torch.cuda.synchronize()
     end = time.time()
     total_time2 = (end - start) * 1000  # ms
@@ -61,8 +63,8 @@ def run_benchmark(
     out_val2 = out2.tolist()
 
     # Calculate differences (assuming out1 and out2 are same shape)
-    out1_np = np.array(out_val1)
-    out2_np = np.array(out_val2)
+    out1_np = np.array(out_val1).flatten()
+    out2_np = np.array(out_val2).flatten()
     abs_diff = np.abs(out1_np - out2_np)
     mean_diff = np.mean(abs_diff)
     max_diff = np.max(abs_diff)
@@ -78,10 +80,9 @@ def run_benchmark(
     print(f"{'Mean Difference':<14}: {mean_diff:.8f}")
     print(f"{'Max  Difference':<14}: {max_diff:.8f}")
     print("-" * 60)
-    print("\nDetailed Output Comparison:")
-    print(f"out1_np:\n{out1_np}")
-    print(f"out2_np:\n{out2_np}")
 
+    # print(out1_np)
+    # print(out2_np)
     return {
         "out1": out1,
         "out2": out2,
@@ -92,18 +93,21 @@ def run_benchmark(
     }
 
 
+Ss = [1024, 2048, 4096]
+Ss = [16, 32, 48, 128, 129]
 
-Ss = [10, 1024, 2048, 4096, 15000000]
-    
 for S in Ss:
     print("=" * 60)
     print(" " * 27 + f"S={S}")
-    a = torch.randn((S)).cuda().float() * 400.0
-    print(a)
-    run_benchmark(lib.reduce_sum, lambda x: torch.sum(x), a, "f32", "f32_torch")
-
-
-
-
-
-
+    a = torch.randn((S, S)).cuda().float()
+    b = torch.randn((S, 1)).cuda().float()
+    run_benchmark(
+        lambda x, y: lib.gemv(x, y),
+        lambda x, y: torch.matmul(x, y),
+        a,
+        b,
+        "f32",
+        "f32_torch",
+    )
+    # print(a)
+    # print(b)
