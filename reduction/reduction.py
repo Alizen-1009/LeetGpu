@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch.utils.cpp_extension import load
 import os
-os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0"
+os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 torch.set_grad_enabled(False)
 
