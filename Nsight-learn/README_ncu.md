@@ -1,76 +1,58 @@
 # Reduction with Nsight Compute
 
-这个目录里的 `profile_reduce_ncu.py` 和 `run_ncu_reduce.sh` 是给 `ncu` 学习和单算子分析准备的。
+这个目录现在只保留一条最直接的工作流：
 
-当前版本默认假设：
+1. `python Nsight-learn/profile_reduce_ncu.py`
+   负责构造输入、预热、并用 `cudaProfilerStart()/cudaProfilerStop()` 只圈住目标 kernel。
+2. `bash Nsight-learn/run_ncu_reduce.sh`
+   负责直接调用 `ncu`，生成 `.ncu-rep`，再从 report 导出一份文本摘要。
 
-- 学习脚本放在 `Nsight-learn/`
-- reduce 的 `.cu` 实现还放在 `reduction/`
+## 为什么不再用 two-step attach
 
-## 1. 先准备 Python 环境
+`two-step attach` 适合这几种情况：
 
-要在你平时能 `import torch` 的环境里运行，例如：
+- 目标进程不是你直接启动的
+- 目标进程寿命很短，`launch-and-attach` 来不及接管
+- 你需要手动连到某个已经在跑的 CUDA 进程
+
+这里的场景并不复杂：我们自己启动 Python，且只想抓一小段 reduce kernel。  
+直接用一条 `ncu ... python ...` 命令，再配合 `--profile-from-start off` 和 `cudaProfilerStart()/cudaProfilerStop()`，就已经足够稳定，也更符合 Nsight Compute 的常见用法。
+
+## 最简单的用法
+
+先确认当前 `python` 能导入 `torch`，而且 CUDA 可用：
 
 ```bash
-conda activate <your-env>
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
-如果这里 `torch.cuda.is_available()` 不是 `True`，先不要往下跑 `ncu`。
-
-## 2. 先做一次普通 benchmark
-
-第一次建议先不用 `ncu`，先把 PyTorch extension 编译好，同时确认算子结果正常：
-
-```bash
-python Nsight-learn/profile_reduce_ncu.py --mode bench --impl float4 --size 16777216 --warmup 20 --iters 200 --check
-```
-
-如果你的卡需要显式指定架构，比如你之前脚本里常写的 `8.9`，可以加：
-
-```bash
-python Nsight-learn/profile_reduce_ncu.py --mode bench --impl float4 --size 16777216 --arch 8.9 --check
-```
-
-可选实现：
-
-- `naive`
-- `float4`
-- `float4_atomic`
-- `torch`
-
-这个步骤会输出平均延迟、近似读取带宽，以及和 `torch.sum` 的结果误差。
-
-## 3. 再用 ncu 抓 profile
-
-最简单的跑法：
+然后直接跑：
 
 ```bash
 bash Nsight-learn/run_ncu_reduce.sh float4 16777216
 ```
 
-这个脚本内部会执行：
-
-- `--profile-from-start off`
-- `cudaProfilerStart()/cudaProfilerStop()`
-
-所以 `ncu` 只会抓我们手动圈起来的 reduce 调用，不会把前面的 warmup 一起算进去。
-
-生成的 report 默认在：
+默认会生成两个文件：
 
 ```bash
 Nsight-learn/ncu-reports/reduce_float4_16777216.ncu-rep
+Nsight-learn/ncu-reports/reduce_float4_16777216.txt
 ```
 
-## 4. 常用 ncu 命令
+其中：
 
-快速看基础指标：
+- `.ncu-rep` 给 `ncu-ui` 打开做可视化
+- `.txt` 是从 report 导出的命令行摘要，方便快速看结果
+
+## 常用命令
+
+基础指标：
 
 ```bash
 bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set basic
 ```
 
-看更全的分析：
+更完整的分析：
 
 ```bash
 bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set full
@@ -82,48 +64,33 @@ bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set full
 bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set basic --kernel-name regex:reduce_sum_kernel
 ```
 
-如果你想对比不同实现：
+指定架构：
 
 ```bash
-bash Nsight-learn/run_ncu_reduce.sh naive 16777216 --set basic
-bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set basic
-bash Nsight-learn/run_ncu_reduce.sh float4_atomic 16777216 --set basic
+ARCH=8.9 bash Nsight-learn/run_ncu_reduce.sh float4 16777216
 ```
 
-## 5. 打开 report
+增加采样次数：
 
-命令行看摘要：
+```bash
+PROFILE_ITERS=10 bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set basic
+```
+
+## 打开 report
+
+命令行查看：
 
 ```bash
 ncu --import Nsight-learn/ncu-reports/reduce_float4_16777216.ncu-rep --page details
 ```
 
-图形界面看 report：
+图形界面查看：
 
 ```bash
 ncu-ui Nsight-learn/ncu-reports/reduce_float4_16777216.ncu-rep
 ```
 
-## 6. 第一次建议重点看什么
+## 如果权限不够
 
-- `LaunchStats`：grid/block 配置是否合理。
-- `Occupancy`：活跃 warps 是否被寄存器、shared memory 或 block size 限住。
-- `SpeedOfLight`：更偏向 memory bound 还是 compute bound。
-- `MemoryWorkloadAnalysis`：全局内存访问是否连续、吞吐有没有吃满。
-
-对这个 reduce 来说，第一次最值得对比的是：
-
-- `naive` 和 `float4` 的吞吐差异
-- `float4_atomic` 里 `atomicAdd` 带来的串行化影响
-- 两阶段 reduce 和单阶段 atomic reduce 的 kernel 时间构成
-
-## 7. 一点经验
-
-- 第一次运行最慢是正常的，因为 `torch.utils.cpp_extension.load()` 会编译 `.cu` 文件。
-- 真正做对比时，先普通跑一次把 extension cache 热起来，再开 `ncu`。
-- `--set full` 很重，学习阶段先用 `--set basic` 更合适。
-- `profile_iters` 默认是 1。如果单次 kernel 太短、采样不稳定，可以加大：
-
-```bash
-PROFILE_ITERS=10 bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set basic
-```
+如果看到 `ERR_NVGPUCTRPERM` 或类似报错，说明当前用户没有 GPU performance counters 权限。  
+这种情况需要管理员放开 profiling 权限，或者临时用有权限的用户运行 `ncu`。
