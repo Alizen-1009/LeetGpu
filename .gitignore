@@ -3,3 +3,5 @@ __pycache__/
 *.log
 *.txt
 *.ncu-rep
+*.nsys-rep
+*.sqlite

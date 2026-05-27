@@ -30,10 +30,18 @@ def parse_args():
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--profile-iters", type=int, default=1)
     parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--arch", default=None, help='Optional TORCH_CUDA_ARCH_LIST, for example "8.9".')
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--verbose-build", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.size <= 0:
+        parser.error("--size must be positive.")
+    if args.warmup < 0:
+        parser.error("--warmup must be non-negative.")
+    if args.profile_iters <= 0:
+        parser.error("--profile-iters must be positive.")
+    return args
 
 
 def setup_cuda(device):
@@ -96,17 +104,22 @@ def run_profile(runner, x, warmup, profile_iters):
 
 def main():
     args = parse_args()
+    torch.set_grad_enabled(False)
     setup_cuda(args.device)
 
     runner = load_runner(args)
-    torch.manual_seed(0)
-    x = torch.randn(args.size, device=f"cuda:{args.device}", dtype=torch.float32) * 400.0
-    out = run_profile(runner, x, args.warmup, args.profile_iters)
+    torch.manual_seed(args.seed)
+    with torch.inference_mode():
+        x = torch.randn(args.size, device=f"cuda:{args.device}", dtype=torch.float32) * 400.0
+        out = run_profile(runner, x, args.warmup, args.profile_iters)
 
     print(f"impl={args.impl}")
     print(f"device={torch.cuda.current_device()}:{torch.cuda.get_device_name(torch.cuda.current_device())}")
     print(f"size={args.size}")
+    print("dtype=torch.float32")
+    print(f"warmup={args.warmup}")
     print(f"profile_iters={args.profile_iters}")
+    print("profile_region=cudaProfilerStart/Stop")
     print(f"result={out.item():.8f}")
 
     if args.check:

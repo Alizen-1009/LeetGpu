@@ -26,6 +26,12 @@
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
+如果你的 `torch` 在某个 conda/env 里，可以直接指定解释器：
+
+```bash
+PYTHON=/path/to/env/bin/python bash Nsight-learn/run_ncu_reduce.sh float4 16777216
+```
+
 然后直接跑：
 
 ```bash
@@ -43,6 +49,7 @@ Nsight-learn/ncu-reports/reduce_float4_16777216.txt
 
 - `.ncu-rep` 给 `ncu-ui` 打开做可视化
 - `.txt` 是从 report 导出的命令行摘要，方便快速看结果
+- 默认只抓自定义 reduce kernel：`reduce_sum_kernel` 和 `sum_kernel`。这样可以避开 Python、allocator、随机数生成、`torch::zeros` 等不相关 kernel。
 
 ## 常用命令
 
@@ -76,6 +83,8 @@ ARCH=8.9 bash Nsight-learn/run_ncu_reduce.sh float4 16777216
 PROFILE_ITERS=10 bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set basic
 ```
 
+学习 NCU 时建议先保持 `PROFILE_ITERS=1`。NCU 更适合看单个 kernel 的硬件指标；多次迭代会生成多个 kernel result，报告会变大，也不等同于普通 benchmark 的平均耗时。后面学 `torch perf` 时再专门做稳定计时。
+
 ## 打开 report
 
 命令行查看：
@@ -94,3 +103,21 @@ ncu-ui Nsight-learn/ncu-reports/reduce_float4_16777216.ncu-rep
 
 如果看到 `ERR_NVGPUCTRPERM` 或类似报错，说明当前用户没有 GPU performance counters 权限。  
 这种情况需要管理员放开 profiling 权限，或者临时用有权限的用户运行 `ncu`。
+
+## 看 reduce kernel 时重点看什么
+
+先从这几块开始，不用一上来盯所有指标：
+
+- `GPU Speed Of Light`：看整体吞吐，尤其是 memory throughput 和 compute throughput 谁更接近上限。
+- `Memory Workload Analysis`：reduce 通常是 memory-bound，重点看 global load/store、L2、DRAM throughput。
+- `Launch Statistics`：确认 grid/block 配置，例如 block 数、每 block 线程数是否符合预期。
+- `Occupancy`：看理论/实际 occupancy、寄存器和 shared memory 是否限制并发。
+- `Scheduler Statistics` / `Warp State Statistics`：如果吞吐不高，看 warp 在等内存、同步，还是调度不足。
+
+当前 `float4` 名字有点容易误导：`reduction_float4.cu` 现在走的是两阶段 reduce，但第一阶段仍是单 float load；真正用 `float4` 向量化 load 的是 `float4_atomic`。所以对比时可以跑：
+
+```bash
+bash Nsight-learn/run_ncu_reduce.sh naive 16777216 --set basic
+bash Nsight-learn/run_ncu_reduce.sh float4 16777216 --set basic
+bash Nsight-learn/run_ncu_reduce.sh float4_atomic 16777216 --set basic
+```

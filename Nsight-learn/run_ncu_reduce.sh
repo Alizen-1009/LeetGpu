@@ -16,9 +16,21 @@ TEXT_FILE="${REPORT_BASE}.txt"
 WARMUP="${WARMUP:-20}"
 PROFILE_ITERS="${PROFILE_ITERS:-1}"
 ARCH="${ARCH:-}"
+PYTHON_BIN="${PYTHON:-python}"
+
+has_ncu_arg() {
+  local expected="$1"
+  shift
+  for arg in "$@"; do
+    if [[ "${arg}" == "${expected}" || "${arg}" == "${expected}="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 PY_ARGS=(
-  python
+  "${PYTHON_BIN}"
   Nsight-learn/profile_reduce_ncu.py
   --impl "${IMPL}"
   --size "${SIZE}"
@@ -34,15 +46,24 @@ fi
 cd "${REPO_ROOT}"
 mkdir -p "${OUTPUT_DIR}"
 
+NCU_ARGS=(
+  --profile-from-start off
+  --target-processes all
+  --force-overwrite
+  --kernel-name-base function
+  -o "${REPORT_BASE}"
+)
+
+if [[ "${IMPL}" != "torch" ]] && ! has_ncu_arg "--kernel-name" "$@" && ! has_ncu_arg "-k" "$@"; then
+  NCU_ARGS+=(--kernel-name "regex:(reduce_sum_kernel|sum_kernel)")
+fi
+
 ncu \
-  --profile-from-start off \
-  --target-processes all \
-  --force-overwrite \
-  -o "${REPORT_BASE}" \
+  "${NCU_ARGS[@]}" \
   "$@" \
   "${PY_ARGS[@]}"
 
-ncu --import "${REPORT_FILE}" --page details > "${TEXT_FILE}"
+ncu --import "${REPORT_FILE}" --page details --print-kernel-base function > "${TEXT_FILE}"
 
 echo "Saved report: ${REPORT_FILE}"
 echo "Saved text summary: ${TEXT_FILE}"
